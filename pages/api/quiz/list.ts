@@ -46,7 +46,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const quizzes = await Quiz.find({ hostUserId: session.user.id })
       .sort({ createdAt: -1 })
-      .select('title description questions createdAt');
+      .select('title description questions createdAt status totalSessions totalParticipants averageScore lastHosted');
 
     res.status(200).json({ quizzes });
   } catch (error) {

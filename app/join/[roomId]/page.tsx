@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,6 +28,11 @@ export default function JoinQuiz() {
   const [hasAnswered, setHasAnswered] = useState(false);
   const [quizCompleted, setQuizCompleted] = useState(false);
   const [error, setError] = useState('');
+  const [submissionTime, setSubmissionTime] = useState<number | null>(null);
+  
+  // Timer refs for proper cleanup
+  const socketRef = useRef<Socket | null>(null);
+  const answerTimeRef = useRef<number>(0);
 
   useEffect(() => {
     const newSocket = io(process.env.NODE_ENV === 'production' ? undefined : 'http://localhost:3000', {
@@ -49,21 +54,28 @@ export default function JoinQuiz() {
       setCurrentQuestion(data);
       setHasAnswered(false);
       setSelectedAnswer(null);
+      setSubmissionTime(null);
+      answerTimeRef.current = Date.now();
     });
 
     newSocket.on('new-question', (data) => {
       setCurrentQuestion(data);
       setHasAnswered(false);
       setSelectedAnswer(null);
+      setSubmissionTime(null);
+      answerTimeRef.current = Date.now();
     });
 
     newSocket.on('answer-submitted', (data) => {
       setHasAnswered(true);
+      setSubmissionTime(Date.now());
     });
 
     newSocket.on('quiz-completed', (data) => {
       setQuizCompleted(true);
       setCurrentQuestion(null);
+      setHasAnswered(false);
+      setSelectedAnswer(null);
     });
 
     newSocket.on('error', (data) => {
@@ -71,9 +83,20 @@ export default function JoinQuiz() {
     });
 
     setSocket(newSocket);
+    socketRef.current = newSocket;
 
     return () => {
       newSocket.disconnect();
+      socketRef.current = null;
+    };
+  }, []);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
     };
   }, []);
 
@@ -89,11 +112,14 @@ export default function JoinQuiz() {
 
   const submitAnswer = (answerIndex: number) => {
     if (socket && currentQuestion && !hasAnswered) {
+      const timeSpent = Math.round((Date.now() - answerTimeRef.current) / 1000);
       setSelectedAnswer(answerIndex);
+      
       socket.emit('submit-answer', {
         roomId,
         questionIndex: currentQuestion.questionIndex,
-        selectedAnswer: answerIndex
+        selectedAnswer: answerIndex,
+        timeSpent
       });
     }
   };
@@ -236,6 +262,10 @@ export default function JoinQuiz() {
                   <div className="text-center p-4 bg-green-50 border border-green-200 rounded-lg">
                     <CheckCircle className="h-8 w-8 text-green-600 mx-auto mb-2" />
                     <p className="text-green-800 font-medium">Answer submitted!</p>
+                    <p className="text-green-600 text-sm">
+                      Submitted in {submissionTime && answerTimeRef.current ? 
+                        Math.round((submissionTime - answerTimeRef.current) / 1000) : 0}s
+                    </p>
                     <p className="text-green-600 text-sm">Waiting for next question...</p>
                   </div>
                 )}

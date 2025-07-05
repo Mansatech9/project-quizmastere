@@ -39,7 +39,9 @@ export default function CreateQuiz() {
       });
 
       if (res.ok) {
-        router.push('/dashboard');
+        const data = await res.json();
+        // Redirect to host page instead of dashboard
+        router.push(`/host/${data.quiz._id}`);
       } else {
         const errorData = await res.json();
         alert(`Failed to generate quiz: ${errorData.message}`);
