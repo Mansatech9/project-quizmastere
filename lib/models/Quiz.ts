@@ -12,6 +12,11 @@ const QuizSchema = new mongoose.Schema({
   description: { type: String },
   questions: [QuestionSchema],
   hostUserId: { type: String, required: true },
+  status: { type: String, enum: ['draft', 'completed'], default: 'draft' },
+  totalSessions: { type: Number, default: 0 },
+  totalParticipants: { type: Number, default: 0 },
+  averageScore: { type: Number, default: 0 },
+  lastHosted: { type: Date },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });

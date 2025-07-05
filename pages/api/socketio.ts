@@ -125,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponseW
           const nextIndex = session.currentQuestion + 1;
 
           if (nextIndex >= quiz.questions.length) {
-            // Quiz completed - calculate scores
+            // Quiz completed - calculate scores and update quiz status
             session.status = 'completed';
             session.endedAt = new Date();
             
@@ -136,8 +136,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponseW
               ).length;
               const score = Math.round((correctAnswers / quiz.questions.length) * 100);
               
+              // Update participant score and mark answers as correct/incorrect
+              p.score = score;
+              p.answers = p.answers.map(a => ({
+                ...a,
+                isCorrect: quiz.questions[a.questionIndex].correctAnswer === a.selectedAnswer
+              }));
+
               return {
                 name: p.name,
+                id: p.socketId,
                 score,
                 correctAnswers,
                 totalQuestions: quiz.questions.length,
@@ -149,7 +157,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponseW
               };
             });
 
+            // Update session results
+            session.results = {
+              totalParticipants: session.participants.length,
+              averageScore: participantsWithScores.length > 0 
+                ? Math.round(participantsWithScores.reduce((sum, p) => sum + p.score, 0) / participantsWithScores.length)
+                : 0,
+              completionRate: 100 // All participants who reached the end completed
+            };
+
             await session.save();
+
+            // Update quiz statistics
+            await Quiz.findByIdAndUpdate(quiz._id, {
+              status: 'completed',
+              $inc: { 
+                totalSessions: 1,
+                totalParticipants: session.participants.length
+              },
+              lastHosted: new Date(),
+              averageScore: session.results.averageScore
+            });
 
             io.to(roomId).emit('quiz-completed', {
               results: participantsWithScores

@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -10,7 +10,7 @@ import { Progress } from '@/components/ui/progress';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Users, Play, SkipForward, Trophy, Copy, QrCode, ArrowLeft, Clock, Eye, EyeOff, Settings, BarChart3 } from 'lucide-react';
+import { Users, Play, SkipForward, Trophy, Copy, QrCode, ArrowLeft, Clock, Eye, EyeOff, Settings, BarChart3, Pause, Square } from 'lucide-react';
 import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import QRCode from 'qrcode';
@@ -53,13 +53,18 @@ export default function HostQuiz() {
   const [qrCode, setQrCode] = useState<string>('');
   const [loading, setLoading] = useState(true);
   
-  // New state for enhanced features
+  // Enhanced timer state
   const [questionTimeLimit, setQuestionTimeLimit] = useState(30);
   const [showAnswers, setShowAnswers] = useState(true);
   const [autoRevealAnswers, setAutoRevealAnswers] = useState(true);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [timerActive, setTimerActive] = useState(false);
+  const [timerPaused, setTimerPaused] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  
+  // Timer refs for proper cleanup
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -116,25 +121,26 @@ export default function HostQuiz() {
     newSocket.on('quiz-completed', (data) => {
       setQuizCompleted(true);
       setShowResults(true);
+      stopTimer(); // Stop timer when quiz completes
     });
 
     setSocket(newSocket);
+    socketRef.current = newSocket;
 
     return () => {
       newSocket.disconnect();
+      socketRef.current = null;
     };
   }, [roomId]);
 
-  // Timer effect
+  // Enhanced timer effect with proper cleanup
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    
-    if (timerActive && timeRemaining > 0) {
-      interval = setInterval(() => {
+    if (timerActive && !timerPaused && timeRemaining > 0) {
+      timerRef.current = setInterval(() => {
         setTimeRemaining((prev) => {
           if (prev <= 1) {
             setTimerActive(false);
-            if (autoRevealAnswers) {
+            if (autoRevealAnswers && !quizCompleted) {
               nextQuestion();
             }
             return 0;
@@ -142,29 +148,81 @@ export default function HostQuiz() {
           return prev - 1;
         });
       }, 1000);
+    } else {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     }
 
-    return () => clearInterval(interval);
-  }, [timerActive, timeRemaining, autoRevealAnswers]);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [timerActive, timerPaused, timeRemaining, autoRevealAnswers, quizCompleted]);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      stopTimer();
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
+
+  const stopTimer = () => {
+    setTimerActive(false);
+    setTimerPaused(false);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const pauseTimer = () => {
+    setTimerPaused(!timerPaused);
+  };
 
   const startQuiz = () => {
     if (socket && roomId) {
-      socket.emit('start-quiz', { roomId });
+      socket.emit('start-quiz', { 
+        roomId, 
+        settings: {
+          questionTimeLimit,
+          autoRevealAnswers,
+          showAnswers
+        }
+      });
       setQuizStarted(true);
       setCurrentQuestion(0);
       setAnswerCounts([0, 0, 0, 0]);
       setTimeRemaining(questionTimeLimit);
       setTimerActive(true);
+      setTimerPaused(false);
     }
   };
 
   const nextQuestion = () => {
     if (socket && roomId) {
+      stopTimer(); // Stop current timer
+      
+      if (currentQuestion + 1 >= (quiz?.questions.length || 0)) {
+        // Quiz completed
+        socket.emit('next-question', { roomId });
+        setQuizCompleted(true);
+        setShowResults(true);
+        return;
+      }
+
       socket.emit('next-question', { roomId });
       setCurrentQuestion(currentQuestion + 1);
       setAnswerCounts([0, 0, 0, 0]);
       setTimeRemaining(questionTimeLimit);
       setTimerActive(true);
+      setTimerPaused(false);
     }
   };
 
@@ -240,10 +298,35 @@ export default function HostQuiz() {
                 <span className="text-purple-600 font-semibold">{participants.length}</span>
               </div>
               {timerActive && (
-                <div className="flex items-center space-x-2 bg-orange-100 px-3 py-1 rounded-full">
-                  <Clock className="h-4 w-4 text-orange-600" />
-                  <span className="text-orange-600 font-semibold">{timeRemaining}s</span>
+                <div className={`flex items-center space-x-2 px-3 py-1 rounded-full ${
+                  timeRemaining <= 10 ? 'bg-red-100' : 'bg-orange-100'
+                }`}>
+                  <Clock className={`h-4 w-4 ${timeRemaining <= 10 ? 'text-red-600' : 'text-orange-600'}`} />
+                  <span className={`font-semibold ${timeRemaining <= 10 ? 'text-red-600' : 'text-orange-600'}`}>
+                    {timeRemaining}s
+                  </span>
+                  {quizStarted && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={pauseTimer}
+                      className="h-6 w-6 p-0"
+                    >
+                      {timerPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+                    </Button>
+                  )}
                 </div>
+              )}
+              {quizStarted && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={stopTimer}
+                  className="border-red-200 text-red-600 hover:bg-red-50"
+                >
+                  <Square className="h-4 w-4 mr-1" />
+                  Stop
+                </Button>
               )}
             </div>
           </div>
@@ -418,8 +501,11 @@ export default function HostQuiz() {
                       </Badge>
                       {timerActive && (
                         <div className="flex items-center space-x-2">
-                          <Clock className="h-4 w-4 text-orange-600" />
-                          <span className="font-semibold text-orange-600">{timeRemaining}s</span>
+                          <Clock className={`h-4 w-4 ${timeRemaining <= 10 ? 'text-red-600' : 'text-orange-600'}`} />
+                          <span className={`font-semibold ${timeRemaining <= 10 ? 'text-red-600' : 'text-orange-600'}`}>
+                            {timeRemaining}s
+                          </span>
+                          {timerPaused && <Badge variant="outline" className="text-yellow-600">Paused</Badge>}
                         </div>
                       )}
                     </div>
